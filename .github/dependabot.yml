@@ -1,0 +1,39 @@
+# Dependabot configuration for keeping GitHub Actions and Go modules up to date
+
+version: 2
+updates:
+  # Monitor GitHub Actions for updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    reviewers:
+      - "__GH_USER__"
+    open-pull-requests-limit: 5
+
+  # Monitor Go modules for updates
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "go"
+    reviewers:
+      - "__GH_USER__"
+    open-pull-requests-limit: 5

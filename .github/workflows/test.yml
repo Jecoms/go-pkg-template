@@ -1,0 +1,122 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # go.mod stays at the floor for consumers. Matrix tests against the
+        # floor + the two newest toolchains to catch regressions on new Go
+        # without raising the consumer floor.
+        go-version: ['1.24', '1.25', '1.26']
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      # Fuzz only on the floor toolchain — running on every matrix leg
+      # multiplies CI minutes without proportional coverage gain.
+      # Auto-discovers any Fuzz* targets under *_test.go files; if there are
+      # none, the loop is a no-op.
+      - name: Fuzz (auto-discovered targets, 10s budget each)
+        if: matrix.go-version == '1.24'
+        run: |
+          set -euo pipefail
+          targets=$(grep -rho '^func \(Fuzz[A-Z][A-Za-z0-9_]*\)' --include='*_test.go' . \
+            | awk '{print $2}' | sed 's/(.*//' | sort -u)
+          if [ -z "$targets" ]; then
+            echo "No Fuzz* targets found; skipping."
+            exit 0
+          fi
+          for fz in $targets; do
+            echo "::group::go test -fuzz=^${fz}$ -fuzztime=10s"
+            go test -run='^$' -fuzz="^${fz}$" -fuzztime=10s ./...
+            echo "::endgroup::"
+          done
+
+      - name: Enforce coverage threshold
+        env:
+          # Floor below which the build fails. Tune per project.
+          MIN_COVERAGE: '85.0'
+        run: |
+          set -euo pipefail
+          total=$(go tool cover -func=coverage.txt | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          echo "Minimum:        ${MIN_COVERAGE}%"
+          awk -v t="$total" -v m="$MIN_COVERAGE" 'BEGIN { exit (t+0 < m+0) ? 1 : 0 }' || {
+            echo "::error::Coverage ${total}% is below the required minimum ${MIN_COVERAGE}%."
+            exit 1
+          }
+          echo "✓ Coverage meets the threshold."
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de
+        with:
+          file: ./coverage.txt
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: '1.24'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20
+        with:
+          version: latest
+
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version: '1.24'
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go fmt
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Code is not formatted:"
+            gofmt -s -d .
+            exit 1
+          fi
